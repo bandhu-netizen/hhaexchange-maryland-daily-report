@@ -1,0 +1,274 @@
+:root {
+  --bg: #efe8dc;
+  --surface: #fbf8f1;
+  --ink: #1c1b16;
+  --muted: #6e6b62;
+  --accent: #2f4a3c;
+  --accent-fg: #f4f1ea;
+  --line: color-mix(in oklab, #1c1b16 12%, transparent);
+  --danger: #8b3a2d;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+body {
+  width: 372px;
+  margin: 0;
+  background: var(--bg);
+}
+
+main {
+  padding: 18px 16px 16px;
+}
+
+.kicker {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+h1 {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  margin: 0 0 8px;
+  line-height: 1.15;
+}
+
+.intro {
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.file-chip {
+  font-size: 12px;
+  font-weight: 650;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  margin-bottom: 12px;
+  word-break: break-word;
+}
+
+.steps {
+  margin: 0 0 14px;
+  padding: 10px 10px 10px 28px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.steps li {
+  margin: 0 0 4px;
+}
+
+.steps li:last-child {
+  margin-bottom: 0;
+}
+
+.steps li.is-current {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.steps li.is-done {
+  color: var(--ink);
+}
+
+.steps strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.steps li.is-current strong {
+  color: var(--accent);
+}
+
+button {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 12px 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.run {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.run:hover {
+  filter: brightness(1.08);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.status-box {
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.status-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.status-message {
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+  color: var(--muted);
+}
+
+.stop {
+  margin-top: 8px;
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.schedule {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.schedule-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.schedule h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.schedule-sub {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.time-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.time-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  flex: 1;
+}
+
+.time-field.mer {
+  flex: 0.9;
+}
+
+.time-field select {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 650;
+  font-family: inherit;
+}
+
+.colon {
+  padding-bottom: 8px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.hint {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.switch {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklab, var(--ink) 18%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.slider::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  top: 3px;
+  background: var(--surface);
+  border-radius: 50%;
+  transition: transform 150ms ease;
+}
+
+.switch input:checked + .slider {
+  background: var(--accent);
+}
+
+.switch input:checked + .slider::before {
+  transform: translateX(18px);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}

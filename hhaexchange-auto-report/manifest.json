@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "HHAeXchange Maryland Daily Report",
+  "version": "0.6.0",
+  "description": "Sets Received From/To to today, clicks View Report, waits until the View window finishes drawing, then downloads Excel (.xlsx) from that view.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting",
+    "downloads",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": [
+    "*://*.hhaexchange.com/*",
+    "*://hhaexchange.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Maryland Daily Report",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.hhaexchange.com/*",
+        "*://hhaexchange.com/*"
+      ],
+      "js": [
+        "config.js",
+        "automation.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
