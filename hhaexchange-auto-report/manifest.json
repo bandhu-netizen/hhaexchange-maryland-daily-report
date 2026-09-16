@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "HHAeXchange Maryland Daily Report",
-  "version": "0.6.0",
-  "description": "Sets Received From/To to today, clicks View Report, waits until the View window finishes drawing, then downloads Excel (.xlsx) from that view.",
+  "version": "0.7.0",
+  "description": "Sets Received From/To to today, clicks View Report, waits until the View window finishes drawing, then downloads one Excel (.xlsx) file and clears the on-page overlay.",
   "permissions": [
     "tabs",
     "storage",

@@ -174,51 +174,77 @@
     });
   }
 
-  function showHud(title, detail) {
+  let hudTimer = null;
+  let hudHideTimer = null;
+  let exportInFlight = false;
+  let exportLocked = false;
+
+  function stopHudTimer() {
+    if (hudTimer) {
+      clearInterval(hudTimer);
+      hudTimer = null;
+    }
+    if (hudHideTimer) {
+      clearTimeout(hudHideTimer);
+      hudHideTimer = null;
+    }
+  }
+
+  function hideHud() {
+    stopHudTimer();
+    const hud = document.getElementById("hha-md-hud");
+    if (hud) hud.remove();
+  }
+
+  function showHud(title, detail, { tone = "running", sticky = true } = {}) {
     let hud = document.getElementById("hha-md-hud");
     if (!hud) {
       hud = document.createElement("div");
       hud.id = "hha-md-hud";
       hud.setAttribute("role", "status");
-      hud.style.cssText = [
-        "position:fixed",
-        "z-index:2147483647",
-        "left:16px",
-        "right:16px",
-        "bottom:16px",
-        "max-width:540px",
-        "margin:0 auto",
-        "background:#2f4a3c",
-        "color:#f4f1ea",
-        "border-radius:12px",
-        "padding:14px 16px",
-        "box-shadow:0 12px 40px rgba(28,27,22,.28)",
-        "font:650 13px/1.35 'Segoe UI',system-ui,sans-serif",
-        "pointer-events:none"
-      ].join(";");
       (document.body || document.documentElement).appendChild(hud);
     }
     if (!document.getElementById("hha-md-hud-style")) {
       const st = document.createElement("style");
       st.id = "hha-md-hud-style";
-      st.textContent = "@keyframes hhaPulse{0%{box-shadow:0 0 0 0 rgba(197,227,207,.7)}70%{box-shadow:0 0 0 10px rgba(197,227,207,0)}100%{box-shadow:0 0 0 0 rgba(197,227,207,0)}}";
+      st.textContent = [
+        "@keyframes hhaPulse{0%{box-shadow:0 0 0 0 rgba(197,227,207,.7)}70%{box-shadow:0 0 0 10px rgba(197,227,207,0)}100%{box-shadow:0 0 0 0 rgba(197,227,207,0)}}",
+        "#hha-md-hud{position:fixed;z-index:2147483647;left:16px;right:16px;bottom:16px;max-width:540px;margin:0 auto;color:#f4f1ea;border-radius:12px;padding:14px 16px;box-shadow:0 12px 40px rgba(28,27,22,.28);font:650 13px/1.35 'Segoe UI',system-ui,sans-serif}",
+        "#hha-md-hud-x{appearance:none;border:0;background:transparent;color:#d7e4db;font:700 18px/1 'Segoe UI',system-ui,sans-serif;cursor:pointer;padding:0 2px;margin-left:8px}"
+      ].join("");
       (document.head || document.documentElement).appendChild(st);
     }
+    const bg = tone === "error" ? "#8b3a2d" : "#2f4a3c";
+    hud.style.background = bg;
+    hud.style.pointerEvents = "auto";
+    const pulse = tone === "running"
+      ? 'animation:hhaPulse 1.4s infinite'
+      : "animation:none";
+    const dot = tone === "success" ? "#9fe7b4" : "#c5e3cf";
     hud.innerHTML =
       '<div style="display:flex;gap:10px;align-items:flex-start">' +
-      '<span style="width:10px;height:10px;border-radius:50%;background:#c5e3cf;margin-top:4px;flex:0 0 auto;animation:hhaPulse 1.4s infinite"></span>' +
-      "<div><div>" + escapeHtml(title) + "</div>" +
+      '<span style="width:10px;height:10px;border-radius:50%;background:' + dot + ";margin-top:4px;flex:0 0 auto;" + pulse + '"></span>' +
+      '<div style="flex:1;min-width:0"><div>' + escapeHtml(title) + "</div>" +
       (detail
         ? '<div style="margin-top:4px;font-weight:500;font-size:12px;color:#d7e4db">' + escapeHtml(detail) + "</div>"
         : "") +
-      "</div></div>";
-  }
-
-  let hudTimer = null;
-  function stopHudTimer() {
-    if (hudTimer) {
-      clearInterval(hudTimer);
-      hudTimer = null;
+      "</div>" +
+      '<button type="button" id="hha-md-hud-x" aria-label="Dismiss">×</button>' +
+      "</div>";
+    const closeBtn = document.getElementById("hha-md-hud-x");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        hideHud();
+      });
+    }
+    if (hudHideTimer) {
+      clearTimeout(hudHideTimer);
+      hudHideTimer = null;
+    }
+    if (!sticky) {
+      hudHideTimer = setTimeout(hideHud, 2200);
     }
   }
 
@@ -648,6 +674,7 @@
   }
 
   async function afterView({ allowClickView = false } = {}) {
+    if (exportLocked) return;
     const viewTab = findViewTab();
     if (viewTab && !reportViewerPresent() && !findExportControl()) {
       showHud("Selecting the View tab", "Opening the report view, then Excel.");
@@ -819,8 +846,6 @@
     return scored[0]?.el || null;
   }
 
-  let exportInFlight = false;
-
   async function triggerExcelOnce() {
     const api = await pageEval("exportExcel");
     if (api?.ok) return { ok: true, via: "api", format: api.format };
@@ -851,8 +876,9 @@
     return { ok: false, error: api?.error || "Export control was not ready." };
   }
 
-  async function exportExcel() {
+  async function exportExcel({ force = false } = {}) {
     if (exportInFlight) return;
+    if (exportLocked && !force) return;
     if (isFilterPage() && !reportViewerPresent() && !findExportControl()) {
       notify("HHA_LOG", { message: "Still on the filter page — waiting for the View window before Excel." });
       return;
@@ -875,6 +901,7 @@
 
       let lastErr = null;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
+        if (exportLocked && !force) return;
         showHud(
           "Saving Excel from the View window",
           attempt === 1 ? "Exporting Excel Open XML (.xlsx)." : `Retry ${attempt} of 3 — still saving Excel, not zip.`
@@ -882,10 +909,13 @@
         try {
           const result = await triggerExcelOnce();
           if (result.ok) {
+            exportLocked = true;
             notify("HHA_LOG", { message: `Excel export started (${result.format || "xlsx"} via ${result.via}).` });
             notify("HHA_ACTION_RESULT", { action: "EXPORT_EXCEL", success: true });
-            showHud("Excel export started", "Chrome is saving Report of today’s date.xlsx");
-            await sleep(12000);
+            showHud(
+              "Saving one Excel file",
+              "This bar closes when the download finishes."
+            );
             return;
           }
           lastErr = result.error || "export did not take";
@@ -897,8 +927,25 @@
       }
       throw new Error(lastErr || "Could not start Excel from the View window toolbar.");
     } finally {
-      stopHudTimer();
       exportInFlight = false;
+    }
+  }
+
+  function resetExportLocks() {
+    exportInFlight = false;
+    exportLocked = false;
+    window.__HHA_VIEW_CLICKED__ = false;
+  }
+
+  function onRunFinished(message = {}) {
+    resetExportLocks();
+    if (message.success) {
+      const detail = message.savedAs
+        ? `${message.savedAs} is in Downloads.`
+        : (message.message || "Excel is in your Downloads folder.");
+      showHud("Report saved", detail, { tone: "success", sticky: false });
+    } else {
+      hideHud();
     }
   }
 
@@ -909,9 +956,10 @@
       } else if (message.type === "HHA_CONFIGURE_REPORT") {
         await configureReport(message.state);
       } else if (message.type === "HHA_AFTER_VIEW" || message.type === "HHA_AFTER_GENERATE") {
+        if (exportLocked) return;
         await afterView({ allowClickView: false });
       } else if (message.type === "HHA_EXPORT_EXCEL" || message.type === "HHA_EXPORT_CSV") {
-        await exportExcel();
+        await exportExcel({ force: Boolean(message.force) });
       }
     } catch (error) {
       notify("HHA_ACTION_RESULT", {
@@ -922,12 +970,48 @@
     }
   }
 
+  let handleChain = Promise.resolve();
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || !message.type?.startsWith("HHA_")) return;
     if (message.type === "HHA_PING") {
       sendResponse({ ok: true });
       return;
     }
-    handle(message);
+    if (message.type === "HHA_RUN_FINISHED") {
+      onRunFinished(message);
+      sendResponse({ ok: true });
+      return;
+    }
+    if (message.type === "HHA_RUN_START") {
+      resetExportLocks();
+      sendResponse({ ok: true });
+      return;
+    }
+    handleChain = handleChain.then(() => handle(message)).catch(() => {});
   });
+
+  try {
+    chrome.storage.onChanged.addListener((changes) => {
+      if (!changes.hhaActiveRun) return;
+      const prev = changes.hhaActiveRun.oldValue;
+      const next = changes.hhaActiveRun.newValue;
+      if (prev && !next) {
+        resetExportLocks();
+        const hud = document.getElementById("hha-md-hud");
+        if (!hud) return;
+        chrome.storage.local.get("hhaLastRun", (stored) => {
+          const last = stored.hhaLastRun;
+          if (last?.success) {
+            onRunFinished({
+              success: true,
+              savedAs: last.savedAs,
+              message: last.statusMessage
+            });
+          } else {
+            hideHud();
+          }
+        });
+      }
+    });
+  } catch (_) {}
 })();

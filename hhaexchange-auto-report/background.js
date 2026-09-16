@@ -24,6 +24,9 @@ let downloadWatchdog = null;
 let heartbeatTimer = null;
 let renameState = { enabled: false, base: "", startedAt: 0 };
 let exportRetryCount = 0;
+let acceptedDownloadId = null;
+const exportSentTabs = new Set();
+let runSucceeded = false;
 
 function stopHeartbeat() {
   if (heartbeatTimer) {
@@ -244,6 +247,8 @@ async function notifyUser({ id, title, message, buttons }) {
 
 async function finish(success, message) {
   if (!activeRun) return;
+  const trackedIds = Array.from(activeRun.trackedTabIds || []);
+  const savedAs = activeRun.savedAs;
   stopHeartbeat();
   exportRetryCount = 0;
   try { await chrome.alarms.clear(WATCH_ALARM); } catch (_) {}
@@ -261,11 +266,34 @@ async function finish(success, message) {
   await chrome.storage.local.set({ [LAST_KEY]: completed });
   activeRun = null;
   await saveRun();
+  await broadcastRunFinished({
+    success,
+    message,
+    savedAs,
+    tabIds: trackedIds
+  });
   if (!success) {
     await setPendingRename(false);
     await setBadge("!", "#8b3a2d");
   } else {
     await setBadge("✓", "#2f4a3c");
+  }
+}
+
+async function broadcastRunFinished({ success, message, savedAs, tabIds = [] }) {
+  const payload = {
+    type: "HHA_RUN_FINISHED",
+    success: Boolean(success),
+    message: message || "",
+    savedAs: savedAs || ""
+  };
+  const tabs = await chrome.tabs.query({ url: ["*://*.hhaexchange.com/*", "*://hhaexchange.com/*"] }).catch(() => []);
+  const ids = new Set([
+    ...tabIds.filter(Boolean),
+    ...tabs.map((t) => t.id).filter(Boolean)
+  ]);
+  for (const id of ids) {
+    try { await chrome.tabs.sendMessage(id, payload); } catch (_) {}
   }
 }
 
@@ -652,6 +680,19 @@ function pageEvalMain(op, args) {
   return { ok: false, error: "unknown op" };
 }
 
+function scoreViewerState(r) {
+  if (!r || r.ok === false) return -1;
+  let s = 0;
+  if (r.hasViewer) s += 50;
+  if (r.rendered) s += 40;
+  if (r.hasExport) s += 20;
+  if (r.exportEnabled) s += 15;
+  if ((r.totalPages || 0) > 0) s += 15;
+  if (r.frame) s += 8;
+  if (r.loading) s -= 4;
+  return s;
+}
+
 function pickPageEvalResult(op, injections) {
   const results = (injections || []).map((i) => i?.result).filter(Boolean);
   if (!results.length) return { ok: false };
@@ -691,6 +732,31 @@ function pickPageEvalResult(op, injections) {
 async function pageEval(tabId, op, args) {
   const allFrames = op === "exportExcel" || op === "reportViewerState" || op === "clickExportExcel";
   try {
+    if (op === "exportExcel" || op === "clickExportExcel") {
+      const states = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        world: "MAIN",
+        func: pageEvalMain,
+        args: ["reportViewerState", {}]
+      });
+      const ranked = (states || [])
+        .map((row) => ({
+          frameId: row.frameId,
+          score: scoreViewerState(row.result),
+          result: row.result
+        }))
+        .sort((a, b) => b.score - a.score);
+      const best = ranked.find((row) => row.score > 0) || ranked[0];
+      if (!best || best.frameId == null) return { ok: false, error: "no viewer frame" };
+      const injections = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [best.frameId] },
+        world: "MAIN",
+        func: pageEvalMain,
+        args: [op, args || {}]
+      });
+      return injections?.[0]?.result || { ok: false };
+    }
+
     const injections = await chrome.scripting.executeScript({
       target: { tabId, allFrames },
       world: "MAIN",
@@ -804,8 +870,8 @@ async function startDownloadWatchdog() {
   if (!activeRun) return;
   if (downloadWatchdog) clearTimeout(downloadWatchdog);
   const delay = activeRun.stage === "waitingDownload"
-    ? 120000
-    : (exportRetryCount === 0 ? 14000 : 16000);
+    ? 180000
+    : (activeRun.exportClickedAt ? 50000 : 20000);
   downloadWatchdog = setTimeout(async () => {
     if (!activeRun) return;
     if (activeRun.stage === "waitingDownload") {
@@ -815,11 +881,11 @@ async function startDownloadWatchdog() {
       );
       return;
     }
-    if (activeRun.stage === "exporting" || activeRun.stage === "waitingViewer") {
-      if (exportRetryCount < 3) {
+    if (activeRun.exportClickedAt && !acceptedDownloadId) {
+      if (exportRetryCount < 1) {
         exportRetryCount += 1;
-        await log(`Excel file did not start yet. Retrying export (${exportRetryCount}/3)…`);
-        await kickExcelOnViewerTabs();
+        await log("Excel file did not start. Trying export one more time…");
+        await kickExcelOnViewerTabs({ force: true });
         await startDownloadWatchdog();
         return;
       }
@@ -831,8 +897,9 @@ async function startDownloadWatchdog() {
   }, delay);
 }
 
-async function kickExcelOnViewerTabs() {
+async function kickExcelOnViewerTabs({ force = false } = {}) {
   if (!activeRun || activeRun.stage === "waitingDownload") return;
+  if (!force && activeRun.exportClickedAt) return;
   const tabs = await chrome.tabs.query({ url: ["*://*.hhaexchange.com/*", "*://hhaexchange.com/*"] });
   for (const tab of tabs) {
     const url = tab.url || "";
@@ -843,15 +910,21 @@ async function kickExcelOnViewerTabs() {
     try {
       if (kind === "setup") {
         if (activeRun.stage === "configuring") continue;
+        if (activeRun.exportClickedAt && !force) continue;
         await send(tab.id, { type: "HHA_AFTER_VIEW" });
       } else {
-        await send(tab.id, { type: "HHA_EXPORT_EXCEL" });
+        if (!force && exportSentTabs.has(tab.id)) continue;
+        exportSentTabs.add(tab.id);
+        await send(tab.id, { type: "HHA_EXPORT_EXCEL", force: Boolean(force) });
       }
     } catch (_) {}
   }
 }
 
 async function onReportDownloaded(item = {}) {
+  if (runSucceeded) return;
+  if (acceptedDownloadId && item.id && item.id !== acceptedDownloadId) return;
+  runSucceeded = true;
   const ext = extensionFromDownload(item);
   const pending = await pendingRename();
   const name = (item.filename || "").split(/[/\\]/).pop() || (pending?.base ? `${pending.base}.${ext}` : reportFilename(ext));
@@ -871,6 +944,11 @@ async function onReportDownloaded(item = {}) {
       }
     });
     await setBadge("✓", "#2f4a3c");
+    await broadcastRunFinished({
+      success: true,
+      message: `Report saved as ${name}.`,
+      savedAs: name
+    });
   }
   await setPendingRename(false);
   await notifyUser({
@@ -885,6 +963,11 @@ async function startRun({ trigger = "manual", state = "maryland" } = {}) {
   const cfg = globalThis.HHA_REPORT_CONFIG?.[state];
   if (!cfg) return { ok: false, error: "Unknown state." };
   if (activeRun) return { ok: false, error: "A report pull is already running." };
+
+  acceptedDownloadId = null;
+  exportSentTabs.clear();
+  exportRetryCount = 0;
+  runSucceeded = false;
 
   await setBadge("…", "#6e6b62");
   const tab = await findOrOpenHhaTab();
@@ -924,12 +1007,19 @@ async function startRun({ trigger = "manual", state = "maryland" } = {}) {
     logs: [],
     targetFilename: reportFilename("xlsx"),
     trigger,
-    keepInBackground: false
+    keepInBackground: false,
+    exportClickedAt: 0
   };
   await saveRun();
   await setPendingRename(true);
   exportRetryCount = 0;
   await rememberPortal(url);
+  try {
+    const tabs = await chrome.tabs.query({ url: ["*://*.hhaexchange.com/*", "*://hhaexchange.com/*"] });
+    for (const t of tabs) {
+      try { await chrome.tabs.sendMessage(t.id, { type: "HHA_RUN_START" }); } catch (_) {}
+    }
+  } catch (_) {}
   await log(
     trigger === "schedule"
       ? `Scheduled 4:50 pull — ${cfg.label} Referral Patients By Status. Running in the background.`
@@ -996,12 +1086,16 @@ async function routeTab(tabId, url) {
   }
 
   if (kind === "viewer" && activeRun.stage !== "waitingDownload") {
+    if (activeRun.exportClickedAt) return;
     activeRun.stage = "exporting";
     activeRun.trackedTabIds = Array.from(new Set([...(activeRun.trackedTabIds || []), tabId]));
     await log("View window opened. Waiting for the report to finish drawing, then Excel…");
     startHeartbeat();
     try {
-      await send(tabId, { type: "HHA_EXPORT_EXCEL" });
+      if (!exportSentTabs.has(tabId) && !activeRun.exportClickedAt) {
+        exportSentTabs.add(tabId);
+        await send(tabId, { type: "HHA_EXPORT_EXCEL" });
+      }
     } catch (error) {
       await log(`Viewer tab not ready yet (${error.message}). Will retry.`);
     }
@@ -1039,6 +1133,8 @@ async function watchForViewerTab(timeoutMs = 60000) {
       await saveRun();
       await focusTab(tab);
       if (tab.status === "complete" && kind !== "setup" && activeRun.stage !== "waitingDownload") {
+        if (activeRun.exportClickedAt || exportSentTabs.has(tab.id)) continue;
+        exportSentTabs.add(tab.id);
         activeRun.stage = "exporting";
         await log("View window is on screen. Waiting for the report to finish drawing, then Excel…");
         startHeartbeat();
@@ -1057,9 +1153,12 @@ async function watchForViewerTab(timeoutMs = 60000) {
     const viewer = tabs.find((t) => pageKind(t.url || "") === "viewer") ||
       tabs.find((t) => activeRun.trackedTabIds?.includes(t.id) && t.id !== activeRun.rootTabId);
     if (viewer?.id) {
-      activeRun.stage = "exporting";
-      await saveRun();
-      try { await send(viewer.id, { type: "HHA_EXPORT_EXCEL" }); } catch (_) {}
+      if (!activeRun.exportClickedAt && !exportSentTabs.has(viewer.id)) {
+        exportSentTabs.add(viewer.id);
+        activeRun.stage = "exporting";
+        await saveRun();
+        try { await send(viewer.id, { type: "HHA_EXPORT_EXCEL" }); } catch (_) {}
+      }
       return viewer;
     }
     await finish(
@@ -1098,6 +1197,7 @@ async function onRunWatch() {
   }
   await armRunWatch();
   if (activeRun.stage === "waitingDownload") return;
+  if (activeRun.exportClickedAt) return;
   if (activeRun.stage === "waitingViewer" || activeRun.stage === "exporting" || activeRun.stage === "configuring") {
     await kickExcelOnViewerTabs();
   }
@@ -1214,8 +1314,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         startHeartbeat();
         watchForViewerTab().catch(() => {});
       } else if (message.action === "EXPORT_EXCEL") {
+        if (!activeRun.exportClickedAt) activeRun.exportClickedAt = Date.now();
         if (activeRun.stage !== "waitingDownload") activeRun.stage = "exporting";
-        await log("Excel export clicked in the View window. Waiting for the .xlsx file…");
+        await log("Excel export clicked in the View window. Waiting for one .xlsx file…");
         await startDownloadWatchdog();
       }
       sendResponse({ ok: true });
@@ -1262,6 +1363,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
     const filename = `${(pending && pending.base) || `Report of ${filenameDate()}`}.${ext}`;
     suggest({ filename, conflictAction: "uniquify" });
     watchedDownloads.set(item.id, { ...item, filename });
+    if (!acceptedDownloadId) acceptedDownloadId = item.id;
     if (activeRun) {
       activeRun.savedAs = filename;
       log(`Renaming download to ${filename}`).catch(() => {});
@@ -1276,9 +1378,22 @@ chrome.downloads.onCreated.addListener(async (item) => {
   const pending = await pendingRename();
   if (!activeRun && !pending) return;
   if (!downloadLooksLikeReport(item)) return;
+  if (runSucceeded) {
+    try { await chrome.downloads.cancel(item.id); } catch (_) {}
+    try { await chrome.downloads.erase({ id: item.id }); } catch (_) {}
+    return;
+  }
+  if (acceptedDownloadId && acceptedDownloadId !== item.id) {
+    try { await chrome.downloads.cancel(item.id); } catch (_) {}
+    try { await chrome.downloads.erase({ id: item.id }); } catch (_) {}
+    if (activeRun) await log("Ignored an extra download — the first Excel file is already saving.");
+    return;
+  }
+  acceptedDownloadId = item.id;
   watchedDownloads.set(item.id, item);
   if (activeRun) {
     activeRun.stage = "waitingDownload";
+    activeRun.downloadId = item.id;
     stopHeartbeat();
     await log("Chrome started the Excel download…");
     await startDownloadWatchdog();
@@ -1294,10 +1409,13 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   if (delta.state?.current === "complete") {
     const item = watchedDownloads.get(delta.id) || { id: delta.id, filename: delta.filename?.current };
     watchedDownloads.delete(delta.id);
+    if (acceptedDownloadId && delta.id !== acceptedDownloadId) return;
     await onReportDownloaded(item);
   } else if (delta.state?.current === "interrupted") {
     watchedDownloads.delete(delta.id);
+    if (acceptedDownloadId && delta.id !== acceptedDownloadId) return;
     if (activeRun) {
+      acceptedDownloadId = null;
       await finish(false, "The Excel download was interrupted. Check Chrome’s download shelf and retry.");
     }
   }
@@ -1426,7 +1544,7 @@ async function boot() {
     } else if (activeRun) {
       await armRunWatch();
       startHeartbeat();
-      if (activeRun.stage === "waitingViewer" || activeRun.stage === "exporting" || activeRun.stage === "configuring") {
+      if (!activeRun.exportClickedAt && (activeRun.stage === "waitingViewer" || activeRun.stage === "exporting" || activeRun.stage === "configuring")) {
         kickExcelOnViewerTabs().catch(() => {});
       }
     }
